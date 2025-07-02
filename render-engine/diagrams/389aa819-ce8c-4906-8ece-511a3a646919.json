@@ -1,0 +1,37 @@
+{
+  "elements" : [ {
+    "type" : "rectangle",
+    "name" : "Backend",
+    "position" : [ -4, 0 ]
+  }, {
+    "type" : "rectangle",
+    "name" : "Redis",
+    "position" : [ 0, 2 ]
+  }, {
+    "type" : "rectangle",
+    "name" : "Database",
+    "position" : [ 0, -2 ]
+  }, {
+    "type" : "arrow",
+    "from" : "Backend",
+    "to" : "Database",
+    "label" : "Query",
+    "position" : [ -2, -1 ]
+  }, {
+    "type" : "arrow",
+    "from" : "Backend",
+    "to" : "Redis",
+    "label" : "Query",
+    "position" : [ -2, 1 ]
+  }, {
+    "type" : "text",
+    "name" : "DB Time",
+    "position" : [ 3, -2 ],
+    "text" : "100ms"
+  }, {
+    "type" : "text",
+    "name" : "Redis Time",
+    "position" : [ 3, 2 ],
+    "text" : "1ms"
+  } ]
+}

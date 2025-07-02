@@ -1,0 +1,55 @@
+{
+  "components" : [ {
+    "name" : "User",
+    "type" : "Rectangle",
+    "position" : [ -4, 2 ]
+  }, {
+    "name" : "Backend",
+    "type" : "Rectangle",
+    "position" : [ -4, -1 ]
+  }, {
+    "name" : "Redis",
+    "type" : "Rectangle",
+    "position" : [ 4, -1 ]
+  }, {
+    "name" : "Database",
+    "type" : "Rectangle",
+    "position" : [ 4, 2 ]
+  } ],
+  "connections" : [ {
+    "from" : "User",
+    "to" : "Backend",
+    "label" : "Request",
+    "time" : 0
+  }, {
+    "from" : "Backend",
+    "to" : "Database",
+    "label" : "Query",
+    "time" : 2
+  }, {
+    "from" : "Database",
+    "to" : "Backend",
+    "label" : "Data",
+    "time" : 3
+  }, {
+    "from" : "Backend",
+    "to" : "User",
+    "label" : "Response (Slow)",
+    "time" : 4
+  }, {
+    "from" : "Backend",
+    "to" : "Redis",
+    "label" : "Query",
+    "time" : 5
+  }, {
+    "from" : "Redis",
+    "to" : "Backend",
+    "label" : "Data",
+    "time" : 6
+  }, {
+    "from" : "Backend",
+    "to" : "User",
+    "label" : "Response (Fast)",
+    "time" : 7
+  } ]
+}

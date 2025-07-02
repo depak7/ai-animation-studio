@@ -1,0 +1,32 @@
+{
+  "description" : "Illustrates how Redis helps backend provide faster responses by caching database queries.",
+  "elements" : [ {
+    "type" : "Rectangle",
+    "name" : "Backend",
+    "position" : [ -3, 0 ]
+  }, {
+    "type" : "Rectangle",
+    "name" : "Database",
+    "position" : [ 3, -2 ]
+  }, {
+    "type" : "Rectangle",
+    "name" : "Redis",
+    "position" : [ 3, 2 ]
+  }, {
+    "type" : "Arrow",
+    "from" : "Backend",
+    "to" : "Database",
+    "label" : "DB Query",
+    "time" : 3
+  }, {
+    "type" : "Arrow",
+    "from" : "Backend",
+    "to" : "Redis",
+    "label" : "Redis Query",
+    "time" : 0.5
+  }, {
+    "type" : "Text",
+    "content" : "Faster Response with Redis",
+    "position" : [ 0, 3.5 ]
+  } ]
+}

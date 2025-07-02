@@ -1,0 +1,35 @@
+{
+  "nodes" : [ {
+    "id" : "user",
+    "label" : "User"
+  }, {
+    "id" : "gemini",
+    "label" : "Gemini"
+  }, {
+    "id" : "backend",
+    "label" : "Backend System"
+  }, {
+    "id" : "db",
+    "label" : "Database"
+  }, {
+    "id" : "redis",
+    "label" : "Redis"
+  } ],
+  "edges" : [ {
+    "source" : "user",
+    "target" : "gemini",
+    "label" : "Prompt"
+  }, {
+    "source" : "gemini",
+    "target" : "backend",
+    "label" : "Response"
+  }, {
+    "source" : "backend",
+    "target" : "db",
+    "label" : "Save"
+  }, {
+    "source" : "backend",
+    "target" : "redis",
+    "label" : "Save (if successful)"
+  } ]
+}

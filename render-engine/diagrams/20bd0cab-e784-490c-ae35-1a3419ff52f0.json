@@ -1,0 +1,35 @@
+{
+  "nodes" : [ {
+    "id" : "user",
+    "label" : "User"
+  }, {
+    "id" : "gemini",
+    "label" : "Gemini"
+  }, {
+    "id" : "backend",
+    "label" : "Backend System"
+  }, {
+    "id" : "db",
+    "label" : "Database"
+  }, {
+    "id" : "redis",
+    "label" : "Redis Cache"
+  } ],
+  "edges" : [ {
+    "source" : "user",
+    "target" : "gemini",
+    "label" : "Prompt"
+  }, {
+    "source" : "gemini",
+    "target" : "backend",
+    "label" : "Response Text"
+  }, {
+    "source" : "backend",
+    "target" : "db",
+    "label" : "Save to DB"
+  }, {
+    "source" : "backend",
+    "target" : "redis",
+    "label" : "Save to Redis (Success)"
+  } ]
+}

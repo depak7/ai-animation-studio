@@ -1,0 +1,33 @@
+{
+  "nodes" : [ {
+    "id" : "backend",
+    "label" : "Backend"
+  }, {
+    "id" : "database",
+    "label" : "Database"
+  }, {
+    "id" : "redis",
+    "label" : "Redis"
+  } ],
+  "edges" : [ {
+    "source" : "backend",
+    "target" : "database",
+    "label" : "Database Query",
+    "type" : "normal"
+  }, {
+    "source" : "backend",
+    "target" : "redis",
+    "label" : "Redis Query",
+    "type" : "cache"
+  }, {
+    "source" : "redis",
+    "target" : "backend",
+    "label" : "Data",
+    "type" : "normal"
+  }, {
+    "source" : "database",
+    "target" : "backend",
+    "label" : "Data",
+    "type" : "normal"
+  } ]
+}

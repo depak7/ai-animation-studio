@@ -1,0 +1,30 @@
+{
+  "nodes" : [ {
+    "id" : "backend",
+    "label" : "Backend"
+  }, {
+    "id" : "redis",
+    "label" : "Redis"
+  }, {
+    "id" : "database",
+    "label" : "Database"
+  } ],
+  "edges" : [ {
+    "source" : "backend",
+    "target" : "database",
+    "label" : "Database Query",
+    "type" : "solid"
+  }, {
+    "source" : "backend",
+    "target" : "redis",
+    "label" : "Redis Query",
+    "type" : "dashed"
+  } ],
+  "times" : [ {
+    "edge" : "backend-database",
+    "time" : "100ms"
+  }, {
+    "edge" : "backend-redis",
+    "time" : "1ms"
+  } ]
+}
