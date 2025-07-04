@@ -5,6 +5,8 @@ import lombok.Data;
 
 import java.time.Instant;
 
+@Entity
+@Table(name = "chats")
 @Data
 public class Chats {
 
@@ -13,7 +15,7 @@ public class Chats {
     private Long id;
 
     @Column(name = "user_id", nullable = false)
-    private String userId;
+    private Long userId;
 
     @Column(nullable = false)
     private String title;

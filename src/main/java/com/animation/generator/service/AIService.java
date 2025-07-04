@@ -1,52 +1,92 @@
 package com.animation.generator.service;
 
+import com.animation.generator.controllers.RenderSseController;
 import com.animation.generator.dtos.UserRequest;
 import com.animation.generator.objects.Diagram;
 import com.animation.generator.repository.DiagramRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 
-
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 @Slf4j
 public class AIService {
 
     @Autowired
-    private DiagramRepository diagramRepository;
-    @Value("${spring.llm.api.key:AIzaSyAHixz2d4aHmP38AOoJmjXmA6f2mjOl7nw}")
-    private String apiKey;
-    private String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey;
+    private DiagramRepository   diagramRepository;
+    @Autowired
+    private RenderSseController renderSseController;
+    @Value("${spring.llm.api.key}")
+    private String              apiKey;
+    @Autowired
+    private ObjectMapper        objectMapper;
+    @Autowired
+    private ChatService         chatService;
+    private final String        BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
-    public Diagram generateDiagramFromPrompt(UserRequest userRequest) {
-        if (userRequest == null || userRequest.getPrompt() == null) {
-            return null;
+    public JsonNode generateDiagramFromPrompt(UserRequest userRequest) {
+        ObjectNode response = objectMapper.createObjectNode();
+        if (userRequest == null || userRequest.getPrompt() == null || userRequest.getPrompt().isEmpty() || userRequest.getConversationId() == null
+                || userRequest.getConversationId().isEmpty() || userRequest.getUserId() == null) {
+            response.put("success", false);
+            response.put("message", "Missing or invalid request parameters.");
+            return response;
         }
-
         try {
+            long existingChatId = userRequest.getChatId();
+            if (existingChatId <= 0) {
+                String chatTitle = userRequest.getPrompt().length() > 100 ? userRequest.getPrompt().substring(0, 100) : userRequest.getPrompt();
+                JsonNode chatJson = objectMapper.createObjectNode().put("title", chatTitle).put("userId", userRequest.getUserId());
+
+                Long chatId = chatService.createChat(chatJson);
+                if (chatId > 0) {
+                    log.info("Created new chat with id {}", chatId);
+                    userRequest.setChatId(chatId);
+                } else {
+                    response.put("success", false);
+                    response.put("message", "Failed to create chat.");
+                    return response;
+                }
+
+            } else {
+                boolean exists = chatService.checkIfChatExists(userRequest.getChatId());
+                if (!exists) {
+                    response.put("success", false);
+                    response.put("message", "Chat ID does not exist.");
+                    return response;
+                }
+            }
             String fullPrompt = buildPromptWithHistory(userRequest);
             String llmResponseJson = queryLLM(fullPrompt);
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode root = mapper.readTree(llmResponseJson);
+            JsonNode root = objectMapper.readTree(llmResponseJson);
+
+            if (!root.has("manimCode") || !root.has("jsonData")) {
+                response.put("success", false);
+                response.put("message", "Invalid LLM response.");
+                return response;
+            }
 
             String manimCode = root.get("manimCode").asText();
             JsonNode jsonData = root.get("jsonData");
+
             Diagram diagram = new Diagram();
             diagram.setUserId(userRequest.getUserId());
             diagram.setPrompt(userRequest.getPrompt());
@@ -54,20 +94,32 @@ public class AIService {
             diagram.setJsonRepresentation(jsonData.toPrettyString());
             diagram.setChatId(userRequest.getChatId());
 
-            Path videoFile = renderWithDocker(manimCode, jsonData);
-            String videoUrl = uploadVideo(videoFile);
+            Path videoFile = renderWithDocker(userRequest.getConversationId(), manimCode, jsonData);
+            if (videoFile == null) {
+                response.put("success", false);
+                response.put("message", "Video rendering failed.");
+                return response;
+            }
 
+            String videoUrl = uploadVideo(videoFile);
             diagram.setVideoSource(videoUrl);
+
             diagramRepository.save(diagram);
             Files.deleteIfExists(videoFile);
-            return diagram;
+
+            response.put("success", true);
+            response.set("diagram", objectMapper.valueToTree(diagram));
+            return response;
+
         } catch (Exception e) {
             log.error("Error generating diagram with Docker", e);
-            return null;
+            response.put("success", false);
+            response.put("message", "Internal server error: " + e.getMessage());
+            return response;
         }
     }
 
-    private String buildPromptWithHistory(UserRequest userRequest) {
+    private String buildPromptWithHistory(UserRequest userRequest) throws JsonProcessingException {
         List<Diagram> previousDiagrams = diagramRepository.findByChatId(userRequest.getChatId());
         StringBuilder contextBuilder = new StringBuilder();
 
@@ -75,6 +127,8 @@ public class AIService {
         for (int i = start; i < previousDiagrams.size(); i++) {
             Diagram d = previousDiagrams.get(i);
             contextBuilder.append("Previous Prompt: ").append(d.getPrompt()).append("\n");
+            JsonNode jsonNode = objectMapper.readTree(d.getJsonRepresentation());
+            contextBuilder.append("Previous JSON: ").append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(jsonNode)).append("\n\n");
             contextBuilder.append("Previous JSON: ").append(d.getJsonRepresentation()).append("\n\n");
         }
 
@@ -82,21 +136,21 @@ public class AIService {
 
         return """
                 You are an AI tool that generates 2D animated architecture diagrams based on natural language.
-                
-                Given a prompt from the user, return a JSON object with the following structure:
-                
+
+                Given a prompt from the user, return a JSON object with the following structure:k
+
                 {
                   "jsonData": { ... },         // Structured architecture representation (used for storage)
                   "manimCode": "<python-code>" // Complete Manim script that renders the animation to an MP4 file
                 }
-                
+
                 Requirements:
                 - The Python code must define a class called `ArchitectureDiagram(Scene)`
                 - The code must generate a full 2D animation using Manim (Text, Rectangle, Arrow)
                 - The animation must be rendered and saved as an MP4 (not a preview)
                 - Use standard Manim constructs (no Tex, LaTeX, or SVGs)
                 - Do not include any explanation or markdown — only valid JSON with the structure above
-                
+
                 Design Guidelines:
                 - Use consistent padding and spacing between elements
                 - Align components to a clean visual grid
@@ -105,29 +159,28 @@ public class AIService {
                 - Avoid arrows crossing or overlapping
                 - Use uniform font sizes and styles for similar components
                 - If there are too many components, organize them into horizontal or vertical layers
-                
+
                 Visual Themes:
                 - Let the user or the model choose a layout style (e.g., "classic", "minimalist", "layered", etc.)
                 - Apply a consistent theme across the entire diagram for visual clarity
-                
+
                 Contextual Continuity:
                 - If the prompt is similar to a previous one, reuse and evolve the previous JSON representation
                 - Use only the most recent two exchanges for continuity if relevant
-                
+
                 Prompt: %s
                 """.formatted(contextBuilder.toString());
     }
 
     private String queryLLM(String prompt) {
+        String url = BASE_URL + "?key=" + apiKey.trim();
         RestTemplate restTemplate = new RestTemplate();
-        Map<String, Object> body = Map.of("contents", List.of(
-                Map.of("role", "user", "parts", List.of(Map.of("text", prompt)))
-        ));
+        Map<String, Object> body = Map.of("contents", List.of(Map.of("role", "user", "parts", List.of(Map.of("text", prompt)))));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-        ResponseEntity<Map> response = restTemplate.postForEntity(GEMINI_URL, request, Map.class);
+        ResponseEntity<Map> response = restTemplate.postForEntity(url, request, Map.class);
         return extractTextFromGeminiResponse(response);
     }
 
@@ -139,31 +192,34 @@ public class AIService {
         return parts.get(0).get("text").toString().replaceAll("(?s)```.*?\\n", "").replaceAll("```", "").trim();
     }
 
-    private Path renderWithDocker(String manimCode, JsonNode jsonData) throws IOException, InterruptedException {
-        String id = UUID.randomUUID().toString();
+    private Path renderWithDocker(String conversationId, String manimCode, JsonNode jsonData) throws IOException, InterruptedException {
         Path basePath = Paths.get("render-engine").toAbsolutePath();
         Path diagramsDir = basePath.resolve("diagrams");
         Path outputDir = basePath.resolve("output/videos");
         Files.createDirectories(diagramsDir);
         Files.createDirectories(outputDir);
-        Path pyFile = diagramsDir.resolve(id + ".py");
-        Path jsonFile = diagramsDir.resolve(id + ".json");
-        Path videoFile = outputDir.resolve(id + ".mp4");
+        Path pyFile = diagramsDir.resolve(conversationId + ".py");
+        Path jsonFile = diagramsDir.resolve(conversationId + ".json");
+        Path videoFile = outputDir.resolve(conversationId + ".mp4");
         Files.writeString(pyFile, manimCode);
         Files.writeString(jsonFile, jsonData.toPrettyString());
-        String containerOutputPath = "/app/output/" + id + ".mp4";
-        ProcessBuilder pb = new ProcessBuilder(
-                "docker", "run", "--rm",
-                "-v", diagramsDir + ":/app/diagrams",
-                "-v", outputDir + ":/app/output",
-                "manim-api",
-                "diagrams/" + id + ".py",
-                "ArchitectureDiagram",
-                "--output_file", containerOutputPath
-        );
-
-        pb.inheritIO();
+        String containerOutputPath = "/app/output/" + conversationId + ".mp4";
+        ProcessBuilder pb = new ProcessBuilder("docker", "run", "--rm", "-v", diagramsDir + ":/app/diagrams", "-v", outputDir + ":/app/output",
+                "manim-api", "diagrams/" + conversationId + ".py", "ArchitectureDiagram", "--output_file", containerOutputPath);
         Process dockerProcess = pb.start();
+        pb.redirectErrorStream(true);
+        BufferedReader stdOutReader = new BufferedReader(new InputStreamReader(dockerProcess.getInputStream()));
+
+        String infoLine;
+        while ((infoLine = stdOutReader.readLine()) != null) {
+            String clean = extractRelevantLine(infoLine);
+            if (clean != null && !clean.isEmpty()) {
+                renderSseController.sendLog(conversationId, clean);
+            }
+        }
+        renderSseController.sendLog(conversationId, "All done! You can now download or preview the animation.");
+        renderSseController.complete(conversationId);
+
         if (dockerProcess.waitFor() != 0) {
             throw new RuntimeException("Docker rendering failed.");
         }
@@ -173,19 +229,58 @@ public class AIService {
     }
 
     private String uploadVideo(Path videoFilePath) throws IOException {
+        String SUPABASE_URL = "https://jnfduhojxxnfyjwzmfnk.supabase.co";
+        String SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpuZmR1aG9qeHhuZnlqd3ptZm5rIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTUyNTU1NywiZXhwIjoyMDY3MTAxNTU3fQ.sZifqnhHirvOgWYhM9vqfDsAmsN4Pk2yg3oS0wvRs_s";
+        String BUCKET_NAME = "ai-animator";
+
         RestTemplate restTemplate = new RestTemplate();
-        FileSystemResource videoResource = new FileSystemResource(videoFilePath.toFile());
-        MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("file", videoResource);
+        String fileName = videoFilePath.getFileName().toString();
+
+        String uploadUrl = SUPABASE_URL + "/storage/v1/object/" + BUCKET_NAME + "/" + fileName;
+
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-        HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
-        ResponseEntity<String> response = restTemplate.postForEntity("https://upload.gofile.io/uploadfile", requestEntity, String.class);
-        if (response.getStatusCode() != HttpStatus.OK) {
-            throw new RuntimeException("Upload to GoFile failed: " + response.getBody());
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.set("apikey", SUPABASE_API_KEY);
+        headers.set("Authorization", "Bearer " + SUPABASE_API_KEY);
+        headers.set("x-upsert", "true");
+
+        byte[] fileBytes = Files.readAllBytes(videoFilePath);
+        HttpEntity<byte[]> requestEntity = new HttpEntity<>(fileBytes, headers);
+
+        ResponseEntity<String> response = restTemplate.exchange(uploadUrl, HttpMethod.POST, requestEntity, String.class);
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            throw new RuntimeException("Upload to Supabase failed: " + response.getBody());
         }
-        JsonNode root = new ObjectMapper().readTree(response.getBody());
-        return root.path("data").path("downloadPage").asText();
+        return SUPABASE_URL + "/storage/v1/object/public/" + BUCKET_NAME + "/" + fileName;
+    }
+
+    private String extractRelevantLine(String raw) {
+        if (raw.contains("Animation") && raw.contains("Partial")) {
+            Matcher matcher = Pattern.compile("Animation (\\d+)").matcher(raw);
+            if (matcher.find()) {
+                return "Animation " + matcher.group(1) + " loaded";
+            }
+        }
+        if (raw.matches(".*Animation (\\d+):.*?(\\d+)%\\|.*")) {
+            Matcher matcher = Pattern.compile("Animation (\\d+):.*?(\\d+)%\\|").matcher(raw);
+            if (matcher.find()) {
+                return "Animation " + matcher.group(1) + " progress: " + matcher.group(2) + "%";
+            }
+        }
+        if (raw.contains("File ready at")) {
+            return "Final video ready!";
+        } else if (raw.contains("Rendered ArchitectureDiagram")) {
+            return "Rendering complete!";
+        } else if (raw.contains("Played")) {
+            return raw.trim();
+        } else if (raw.contains("ERROR") || raw.contains("Exception")) {
+            return "Error occurred during rendering";
+        }
+        if (raw.contains("/app/") || raw.contains("scene_file_writer") || raw.contains("scene.py")) {
+            return null;
+        }
+        return null;
     }
 
 }

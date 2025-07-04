@@ -7,4 +7,5 @@ public class UserRequest {
     private Long userId;
     private Long chatId;
     private String prompt;
+    private String conversationId;
 }
