@@ -8,4 +8,5 @@ public class UserRequest {
     private Long chatId;
     private String prompt;
     private String conversationId;
+    private String guestId;
 }

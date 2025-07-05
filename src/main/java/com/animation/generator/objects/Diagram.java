@@ -15,6 +15,8 @@ public class Diagram {
     private Long userId;
     @Column(name = "chat_id")
     private Long chatId;
+    @Column(name = "guest_id")
+    private String guestId;
     @Column(name = "json_representation")
     private String jsonRepresentation;
     @Column(name = "generated_code")

@@ -17,6 +17,9 @@ public class Chats {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    @Column(name = "guest_id")
+    private String guestId;
+
     @Column(nullable = false)
     private String title;
 

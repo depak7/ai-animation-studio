@@ -9,25 +9,24 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@RequestMapping("/chats")
-@CrossOrigin(origins = "*", allowedHeaders = "*")
+@RequestMapping("/api/chats")
 public class ChatController {
     @Autowired
     private ChatService chatService;
 
     @GetMapping("/get-all-chats-of-user")
-    public List<Chats> getAllChatsofUser(@RequestParam Long userId) {
-        return chatService.getAllChatsofUserId(userId);
+    public List<Chats> getAllChatsofUser() {
+        return chatService.getAllChatsofUserId();
     }
 
     @GetMapping("/get-chat-history")
-    public List<Diagram> getChatHistory(@RequestParam Long userId, @RequestParam Long chatId) {
-        return chatService.getAllDiagramsofChatId(userId, chatId);
+    public List<Diagram> getChatHistory(@RequestParam Long chatId) {
+        return chatService.getAllDiagramsofChatId(chatId);
     }
 
     @GetMapping("/chats-exists")
-    public boolean chatsExist(@RequestParam Long userId, @RequestParam Long chatId) {
-        return chatService.checkIfChatExists(userId);
+    public boolean chatsExist(@RequestParam Long chatId) {
+        return chatService.checkIfChatExists(chatId);
     }
 
     @DeleteMapping("/delete-chats")

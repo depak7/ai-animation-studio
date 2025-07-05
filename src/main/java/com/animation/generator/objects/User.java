@@ -10,6 +10,8 @@ public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.AUTO)
     private Long id;
+    @Column(name = "guest_id", unique = true)
+    private String guestId;
     private String email;
     private String username;
     @Column(name = "created_at")

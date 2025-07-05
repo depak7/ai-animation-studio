@@ -8,6 +8,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -40,21 +41,25 @@ public class AIService {
     private ObjectMapper        objectMapper;
     @Autowired
     private ChatService         chatService;
+    @Autowired
+    private HttpServletRequest request;
     private final String        BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
     public JsonNode generateDiagramFromPrompt(UserRequest userRequest) {
         ObjectNode response = objectMapper.createObjectNode();
-        if (userRequest == null || userRequest.getPrompt() == null || userRequest.getPrompt().isEmpty() || userRequest.getConversationId() == null
-                || userRequest.getConversationId().isEmpty() || userRequest.getUserId() == null) {
-            response.put("success", false);
-            response.put("message", "Missing or invalid request parameters.");
-            return response;
-        }
         try {
+            Long userId =request.getAttribute("userId") != null ? (Long) request.getAttribute("userId") : 0;
+            String guestId = (String) request.getAttribute("guestId");
+            if (userRequest == null || userRequest.getPrompt() == null || userRequest.getPrompt().isEmpty() || userRequest.getConversationId() == null
+                    || userRequest.getConversationId().isEmpty()) {
+                response.put("success", false);
+                response.put("message", "Missing or invalid request parameters.");
+                return response;
+            }
             long existingChatId = userRequest.getChatId();
             if (existingChatId <= 0) {
                 String chatTitle = userRequest.getPrompt().length() > 100 ? userRequest.getPrompt().substring(0, 100) : userRequest.getPrompt();
-                JsonNode chatJson = objectMapper.createObjectNode().put("title", chatTitle).put("userId", userRequest.getUserId());
+                JsonNode chatJson = objectMapper.createObjectNode().put("title", chatTitle).put("userId", userId).put("guestId", guestId);
 
                 Long chatId = chatService.createChat(chatJson);
                 if (chatId > 0) {
@@ -88,7 +93,8 @@ public class AIService {
             JsonNode jsonData = root.get("jsonData");
 
             Diagram diagram = new Diagram();
-            diagram.setUserId(userRequest.getUserId());
+            diagram.setUserId(userId);
+            diagram.setGuestId(guestId);
             diagram.setPrompt(userRequest.getPrompt());
             diagram.setGeneratedCode(manimCode);
             diagram.setJsonRepresentation(jsonData.toPrettyString());

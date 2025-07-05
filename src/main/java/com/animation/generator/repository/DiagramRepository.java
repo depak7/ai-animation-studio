@@ -10,4 +10,6 @@ import java.util.List;
 public interface DiagramRepository extends JpaRepository<Diagram,Long> {
     List<Diagram> findByChatId(Long chatId);
     List<Diagram> findByUserIdAndChatId(Long userId, Long chatId);
+    List<Diagram> findByGuestIdAndChatId(String guestId, Long chatId);
+    List<Diagram> findByGuestId(String guestId);
 }
