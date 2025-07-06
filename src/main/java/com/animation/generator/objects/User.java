@@ -8,7 +8,7 @@ import java.time.Instant;
 @Data
 public class User {
     @Id
-    @GeneratedValue(strategy = GenerationType.AUTO)
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     @Column(name = "guest_id", unique = true)
     private String guestId;
