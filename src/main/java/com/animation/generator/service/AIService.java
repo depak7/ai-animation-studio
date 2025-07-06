@@ -16,16 +16,11 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Objects;
 
 @Service
 @Slf4j
@@ -43,6 +38,7 @@ public class AIService {
     private ChatService         chatService;
     @Autowired
     private HttpServletRequest request;
+
     private final String        BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
     public JsonNode generateDiagramFromPrompt(UserRequest userRequest) {
@@ -100,19 +96,14 @@ public class AIService {
             diagram.setJsonRepresentation(jsonData.toPrettyString());
             diagram.setChatId(userRequest.getChatId());
 
-            Path videoFile = renderWithDocker(userRequest.getConversationId(), manimCode, jsonData);
-            if (videoFile == null) {
+            String videoUrl=renderWithPythonMicroservice(userRequest.getConversationId(), manimCode, jsonData);
+            if (videoUrl == null || videoUrl.isEmpty()) {
                 response.put("success", false);
                 response.put("message", "Video rendering failed.");
                 return response;
             }
-
-            String videoUrl = uploadVideo(videoFile);
             diagram.setVideoSource(videoUrl);
-
             diagramRepository.save(diagram);
-            Files.deleteIfExists(videoFile);
-
             response.put("success", true);
             response.set("diagram", objectMapper.valueToTree(diagram));
             return response;
@@ -198,95 +189,25 @@ public class AIService {
         return parts.get(0).get("text").toString().replaceAll("(?s)```.*?\\n", "").replaceAll("```", "").trim();
     }
 
-    private Path renderWithDocker(String conversationId, String manimCode, JsonNode jsonData) throws IOException, InterruptedException {
-        Path basePath = Paths.get("render-engine").toAbsolutePath();
-        Path diagramsDir = basePath.resolve("diagrams");
-        Path outputDir = basePath.resolve("output/videos");
-        Files.createDirectories(diagramsDir);
-        Files.createDirectories(outputDir);
-        Path pyFile = diagramsDir.resolve(conversationId + ".py");
-        Path jsonFile = diagramsDir.resolve(conversationId + ".json");
-        Path videoFile = outputDir.resolve(conversationId + ".mp4");
-        Files.writeString(pyFile, manimCode);
-        Files.writeString(jsonFile, jsonData.toPrettyString());
-        String containerOutputPath = "/app/output/" + conversationId + ".mp4";
-        ProcessBuilder pb = new ProcessBuilder("docker", "run", "--rm", "-v", diagramsDir + ":/app/diagrams", "-v", outputDir + ":/app/output",
-                "manim-api", "diagrams/" + conversationId + ".py", "ArchitectureDiagram", "--output_file", containerOutputPath);
-        Process dockerProcess = pb.start();
-        pb.redirectErrorStream(true);
-        BufferedReader stdOutReader = new BufferedReader(new InputStreamReader(dockerProcess.getInputStream()));
-
-        String infoLine;
-        while ((infoLine = stdOutReader.readLine()) != null) {
-            String clean = extractRelevantLine(infoLine);
-            if (clean != null && !clean.isEmpty()) {
-                renderSseController.sendLog(conversationId, clean);
-            }
-        }
-        renderSseController.sendLog(conversationId, "All done! You can now download or preview the animation.");
-        renderSseController.complete(conversationId);
-
-        if (dockerProcess.waitFor() != 0) {
-            throw new RuntimeException("Docker rendering failed.");
-        }
-        Files.deleteIfExists(pyFile);
-        Files.deleteIfExists(jsonFile);
-        return videoFile;
-    }
-
-    private String uploadVideo(Path videoFilePath) throws IOException {
-        String SUPABASE_URL = "https://jnfduhojxxnfyjwzmfnk.supabase.co";
-        String SUPABASE_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpuZmR1aG9qeHhuZnlqd3ptZm5rIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MTUyNTU1NywiZXhwIjoyMDY3MTAxNTU3fQ.sZifqnhHirvOgWYhM9vqfDsAmsN4Pk2yg3oS0wvRs_s";
-        String BUCKET_NAME = "ai-animator";
-
-        RestTemplate restTemplate = new RestTemplate();
-        String fileName = videoFilePath.getFileName().toString();
-
-        String uploadUrl = SUPABASE_URL + "/storage/v1/object/" + BUCKET_NAME + "/" + fileName;
-
+    public String renderWithPythonMicroservice(String conversationId, String manimCode, JsonNode jsonData) throws IOException {
+        ObjectNode requestJson = objectMapper.createObjectNode();
+        requestJson.put("conversation_id", conversationId);
+        requestJson.put("code", manimCode);
+        requestJson.set("json_data", jsonData);
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-        headers.set("apikey", SUPABASE_API_KEY);
-        headers.set("Authorization", "Bearer " + SUPABASE_API_KEY);
-        headers.set("x-upsert", "true");
-
-        byte[] fileBytes = Files.readAllBytes(videoFilePath);
-        HttpEntity<byte[]> requestEntity = new HttpEntity<>(fileBytes, headers);
-
-        ResponseEntity<String> response = restTemplate.exchange(uploadUrl, HttpMethod.POST, requestEntity, String.class);
-
-        if (!response.getStatusCode().is2xxSuccessful()) {
-            throw new RuntimeException("Upload to Supabase failed: " + response.getBody());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<String> requestEntity = new HttpEntity<>(objectMapper.writeValueAsString(requestJson), headers);
+        RestTemplate restTemplate = new RestTemplate();
+        ResponseEntity<JsonNode> response = restTemplate.postForEntity(
+                "https://ai-animator-manim-runner.livelyocean-b0186b38.southindia.azurecontainerapps.io/run",
+                requestEntity,
+                JsonNode.class
+        );
+        if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
+            throw new IOException("Failed to call Python microservice: " +
+                    response.getStatusCode() + " - " + response.getBody());
         }
-        return SUPABASE_URL + "/storage/v1/object/public/" + BUCKET_NAME + "/" + fileName;
-    }
-
-    private String extractRelevantLine(String raw) {
-        if (raw.contains("Animation") && raw.contains("Partial")) {
-            Matcher matcher = Pattern.compile("Animation (\\d+)").matcher(raw);
-            if (matcher.find()) {
-                return "Animation " + matcher.group(1) + " loaded";
-            }
-        }
-        if (raw.matches(".*Animation (\\d+):.*?(\\d+)%\\|.*")) {
-            Matcher matcher = Pattern.compile("Animation (\\d+):.*?(\\d+)%\\|").matcher(raw);
-            if (matcher.find()) {
-                return "Animation " + matcher.group(1) + " progress: " + matcher.group(2) + "%";
-            }
-        }
-        if (raw.contains("File ready at")) {
-            return "Final video ready!";
-        } else if (raw.contains("Rendered ArchitectureDiagram")) {
-            return "Rendering complete!";
-        } else if (raw.contains("Played")) {
-            return raw.trim();
-        } else if (raw.contains("ERROR") || raw.contains("Exception")) {
-            return "Error occurred during rendering";
-        }
-        if (raw.contains("/app/") || raw.contains("scene_file_writer") || raw.contains("scene.py")) {
-            return null;
-        }
-        return null;
+        return Objects.requireNonNull(response.getBody()).get("url").asText();
     }
 
 }
