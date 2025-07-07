@@ -1,6 +1,5 @@
 package com.animation.generator.service;
 
-import com.animation.generator.controllers.RenderSseController;
 import com.animation.generator.dtos.UserRequest;
 import com.animation.generator.objects.Diagram;
 import com.animation.generator.repository.DiagramRepository;
@@ -27,29 +26,45 @@ import java.util.Objects;
 public class AIService {
 
     @Autowired
-    private DiagramRepository   diagramRepository;
-    @Autowired
-    private RenderSseController renderSseController;
+    private DiagramRepository diagramRepository;
     @Value("${spring.llm.api.key}")
-    private String              apiKey;
+    private String apiKey;
     @Autowired
-    private ObjectMapper        objectMapper;
+    private ObjectMapper objectMapper;
     @Autowired
-    private ChatService         chatService;
+    private ChatService chatService;
     @Autowired
     private HttpServletRequest request;
 
-    private final String        BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+    private final String BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
     public JsonNode generateDiagramFromPrompt(UserRequest userRequest) {
         ObjectNode response = objectMapper.createObjectNode();
         try {
-            Long userId =request.getAttribute("userId") != null ? (Long) request.getAttribute("userId") : 0;
+            Long userId = request.getAttribute("userId") != null ? (Long) request.getAttribute("userId") : 0;
             String guestId = (String) request.getAttribute("guestId");
             if (userRequest == null || userRequest.getPrompt() == null || userRequest.getPrompt().isEmpty() || userRequest.getConversationId() == null
                     || userRequest.getConversationId().isEmpty()) {
                 response.put("success", false);
                 response.put("message", "Missing or invalid request parameters.");
+                return response;
+            }
+            String fullPrompt = buildPromptWithHistory(userRequest);
+            String llmResponseJson = queryLLM(fullPrompt);
+            JsonNode root = objectMapper.readTree(llmResponseJson);
+
+            if (!root.has("manimCode") || !root.has("jsonData")) {
+                response.put("success", false);
+                response.put("message", "Invalid LLM response.");
+                return response;
+            }
+
+            String manimCode = root.get("manimCode").asText();
+            JsonNode jsonData = root.get("jsonData");
+            String videoUrl = renderWithPythonMicroservice(userRequest.getConversationId(), manimCode, jsonData);
+            if (videoUrl == null || videoUrl.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "Video rendering failed.");
                 return response;
             }
             long existingChatId = userRequest.getChatId();
@@ -75,19 +90,6 @@ public class AIService {
                     return response;
                 }
             }
-            String fullPrompt = buildPromptWithHistory(userRequest);
-            String llmResponseJson = queryLLM(fullPrompt);
-            JsonNode root = objectMapper.readTree(llmResponseJson);
-
-            if (!root.has("manimCode") || !root.has("jsonData")) {
-                response.put("success", false);
-                response.put("message", "Invalid LLM response.");
-                return response;
-            }
-
-            String manimCode = root.get("manimCode").asText();
-            JsonNode jsonData = root.get("jsonData");
-
             Diagram diagram = new Diagram();
             diagram.setUserId(userId);
             diagram.setGuestId(guestId);
@@ -95,19 +97,11 @@ public class AIService {
             diagram.setGeneratedCode(manimCode);
             diagram.setJsonRepresentation(jsonData.toPrettyString());
             diagram.setChatId(userRequest.getChatId());
-
-            String videoUrl=renderWithPythonMicroservice(userRequest.getConversationId(), manimCode, jsonData);
-            if (videoUrl == null || videoUrl.isEmpty()) {
-                response.put("success", false);
-                response.put("message", "Video rendering failed.");
-                return response;
-            }
             diagram.setVideoSource(videoUrl);
             diagramRepository.save(diagram);
             response.put("success", true);
             response.set("diagram", objectMapper.valueToTree(diagram));
             return response;
-
         } catch (Exception e) {
             log.error("Error generating diagram with Docker", e);
             response.put("success", false);
@@ -123,51 +117,54 @@ public class AIService {
         int start = Math.max(0, previousDiagrams.size() - 2);
         for (int i = start; i < previousDiagrams.size(); i++) {
             Diagram d = previousDiagrams.get(i);
-            contextBuilder.append("Previous Prompt: ").append(d.getPrompt()).append("\n");
             JsonNode jsonNode = objectMapper.readTree(d.getJsonRepresentation());
-            contextBuilder.append("Previous JSON: ").append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(jsonNode)).append("\n\n");
-            contextBuilder.append("Previous JSON: ").append(d.getJsonRepresentation()).append("\n\n");
+            String summary = jsonNode.path("jsonData").path("summary").asText("");
+            String style = jsonNode.path("jsonData").path("style").asText("");
+            contextBuilder.append("Previous Prompt: ").append(d.getPrompt()).append("\n");
+            contextBuilder.append("Previous Summary: ").append(summary).append("\n");
+            contextBuilder.append("Previous Style: ").append(style).append("\n\n");
         }
 
-        contextBuilder.append("Current Prompt: ").append(userRequest.getPrompt()).append("\n");
+        contextBuilder.append("User Prompt: ").append(userRequest.getPrompt()).append("\n");
 
         return """
-                You are an AI tool that generates 2D animated architecture diagrams based on natural language.
-
-                Given a prompt from the user, return a JSON object with the following structure:k
-
+                You are a Python developer who specializes in creating educational and visual animations using the Manim library (Community Edition).
+                
+                Your job is to take a high-level natural language prompt from a user and:
+                1. Understand the core concept or scene being requested.
+                2. Plan the animation logically using Manim constructs.
+                3. Output a complete, clean Python script that builds the animation step-by-step using Manim CE.
+                
+                Your response must be a single JSON object with this structure:
+                
                 {
-                  "jsonData": { ... },         // Structured architecture representation (used for storage)
-                  "manimCode": "<python-code>" // Complete Manim script that renders the animation to an MP4 file
+                  "jsonData": {
+                    "summary": "<short summary of the scene concept>",
+                    "style": "<visual style or layout used>",
+                    ...
+                  },
+                  "manimCode": "<complete Python script>"
                 }
-
-                Requirements:
-                - The Python code must define a class called `ArchitectureDiagram(Scene)`
-                - The code must generate a full 2D animation using Manim (Text, Rectangle, Arrow)
-                - The animation must be rendered and saved as an MP4 (not a preview)
-                - Use standard Manim constructs (no Tex, LaTeX, or SVGs)
-                - Do not include any explanation or markdown — only valid JSON with the structure above
-
-                Design Guidelines:
-                - Use consistent padding and spacing between elements
-                - Align components to a clean visual grid
-                - Ensure text stays inside or clearly beside shapes — no overlap
-                - Use rounded rectangles for UI/frontend, plain rectangles for services, ellipses for databases
-                - Avoid arrows crossing or overlapping
-                - Use uniform font sizes and styles for similar components
-                - If there are too many components, organize them into horizontal or vertical layers
-
-                Visual Themes:
-                - Let the user or the model choose a layout style (e.g., "classic", "minimalist", "layered", etc.)
-                - Apply a consistent theme across the entire diagram for visual clarity
-
-                Contextual Continuity:
-                - If the prompt is similar to a previous one, reuse and evolve the previous JSON representation
-                - Use only the most recent two exchanges for continuity if relevant
-
-                Prompt: %s
+                
+                ### Requirements:
+                - The "manimCode" should define a class `ArchitectureDiagram(Scene)`
+                - Use only standard Manim CE classes like `Circle`, `Square`, `Text`, `Arrow`, `Line`, etc.
+                - Use animation methods like `Create()`, `Write()`, `FadeIn()`, `Transform()`, etc.
+                - Animate constructively — build scenes in logical steps using `self.wait()` between them
+                - Do not output explanations, markdown, or commentary — return only the JSON
+                
+                ### Style Guidelines:
+                - Layout should be clean, readable, and non-overlapping
+                - Use consistent visual structure and labeling
+                - Use appropriate shapes (e.g., triangle for geometry, rectangle for boxes, etc.)
+                
+                ### Context from recent user interactions (if applicable):
+                %s
+                
+                Now generate the complete JSON + Manim code for the current user request.
                 """.formatted(contextBuilder.toString());
     }
+
 
     private String queryLLM(String prompt) {
         String url = BASE_URL + "?key=" + apiKey.trim();
