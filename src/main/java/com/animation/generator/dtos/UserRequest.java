@@ -9,4 +9,6 @@ public class UserRequest {
     private String prompt;
     private String conversationId;
     private String guestId;
+    private boolean skipllmResponse;
+    private String customCode;
 }

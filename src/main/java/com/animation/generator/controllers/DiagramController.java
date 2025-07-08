@@ -1,7 +1,6 @@
 package com.animation.generator.controllers;
 
 import com.animation.generator.dtos.UserRequest;
-import com.animation.generator.objects.Diagram;
 import com.animation.generator.service.AIService;
 
 import com.fasterxml.jackson.databind.JsonNode;

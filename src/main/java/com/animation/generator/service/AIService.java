@@ -43,30 +43,51 @@ public class AIService {
         try {
             Long userId = request.getAttribute("userId") != null ? (Long) request.getAttribute("userId") : 0;
             String guestId = (String) request.getAttribute("guestId");
-            if (userRequest == null || userRequest.getPrompt() == null || userRequest.getPrompt().isEmpty() || userRequest.getConversationId() == null
-                    || userRequest.getConversationId().isEmpty()) {
+
+            if (userRequest == null || userRequest.getPrompt() == null || userRequest.getPrompt().isEmpty() || userRequest.getConversationId() == null || userRequest.getConversationId().isEmpty()) {
                 response.put("success", false);
                 response.put("message", "Missing or invalid request parameters.");
                 return response;
             }
-            String fullPrompt = buildPromptWithHistory(userRequest);
-            String llmResponseJson = queryLLM(fullPrompt);
-            JsonNode root = objectMapper.readTree(llmResponseJson);
 
-            if (!root.has("manimCode") || !root.has("jsonData")) {
+            String manimCode;
+            JsonNode jsonData;
+
+            if (userRequest.isSkipllmResponse()) {
+                if (userRequest.getCustomCode() == null || userRequest.getCustomCode().isEmpty()) {
+                    response.put("success", false);
+                    response.put("message", "Custom Manim code is missing.");
+                    return response;
+                }
+                manimCode = userRequest.getCustomCode();
+                jsonData = objectMapper.createObjectNode();
+            } else {
+                String fullPrompt = buildPromptWithHistory(userRequest);
+                String llmResponseJson = queryLLM(fullPrompt);
+                JsonNode root = objectMapper.readTree(llmResponseJson);
+
+                if (!root.has("manimCode") || !root.has("jsonData")) {
+                    response.put("success", false);
+                    response.put("message", "Invalid LLM response.");
+                    return response;
+                }
+
+                manimCode = root.get("manimCode").asText();
+                jsonData = root.get("jsonData");
+            }
+            if (!manimCode.contains("class ArchitectureDiagram(Scene):")) {
                 response.put("success", false);
-                response.put("message", "Invalid LLM response.");
+                response.put("message", "code does not contain required class.");
                 return response;
             }
-
-            String manimCode = root.get("manimCode").asText();
-            JsonNode jsonData = root.get("jsonData");
-            String videoUrl = renderWithPythonMicroservice(userRequest.getConversationId(), manimCode, jsonData);
+            String decoded = manimCode.replace("\\n", "\n");
+            String videoUrl = renderWithPythonMicroservice(userRequest.getConversationId(), decoded, jsonData);
             if (videoUrl == null || videoUrl.isEmpty()) {
                 response.put("success", false);
                 response.put("message", "Video rendering failed.");
                 return response;
             }
+
             long existingChatId = userRequest.getChatId();
             if (existingChatId <= 0) {
                 String chatTitle = userRequest.getPrompt().length() > 100 ? userRequest.getPrompt().substring(0, 100) : userRequest.getPrompt();
@@ -90,6 +111,7 @@ public class AIService {
                     return response;
                 }
             }
+
             Diagram diagram = new Diagram();
             diagram.setUserId(userId);
             diagram.setGuestId(guestId);
@@ -99,11 +121,13 @@ public class AIService {
             diagram.setChatId(userRequest.getChatId());
             diagram.setVideoSource(videoUrl);
             diagramRepository.save(diagram);
+
             response.put("success", true);
             response.set("diagram", objectMapper.valueToTree(diagram));
             return response;
+
         } catch (Exception e) {
-            log.error("Error generating diagram with Docker", e);
+            log.error("Error generating diagram", e);
             response.put("success", false);
             response.put("message", "Internal server error: " + e.getMessage());
             return response;
@@ -195,14 +219,9 @@ public class AIService {
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<String> requestEntity = new HttpEntity<>(objectMapper.writeValueAsString(requestJson), headers);
         RestTemplate restTemplate = new RestTemplate();
-        ResponseEntity<JsonNode> response = restTemplate.postForEntity(
-                "https://ai-animator-manim-runner.livelyocean-b0186b38.southindia.azurecontainerapps.io/run",
-                requestEntity,
-                JsonNode.class
-        );
+        ResponseEntity<JsonNode> response = restTemplate.postForEntity("https://ai-animator-manim-runner.livelyocean-b0186b38.southindia.azurecontainerapps.io/run", requestEntity, JsonNode.class);
         if (response.getStatusCode() != HttpStatus.OK || response.getBody() == null) {
-            throw new IOException("Failed to call Python microservice: " +
-                    response.getStatusCode() + " - " + response.getBody());
+            throw new IOException("Failed to call Python microservice: " + response.getStatusCode() + " - " + response.getBody());
         }
         return Objects.requireNonNull(response.getBody()).get("url").asText();
     }
